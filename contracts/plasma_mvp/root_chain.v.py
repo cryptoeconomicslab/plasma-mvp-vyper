@@ -1,3 +1,12 @@
+struct ChildChainBlock:
+    root: bytes32
+    blockTimestamp: timestamp
+
+struct Exit:
+    owner: address
+    token: address
+    amount: uint256
+
 contract PriorityQueue():
     def setup() -> bool: modifying
     def insert(_k: uint256) -> bool: modifying 
@@ -10,18 +19,12 @@ ExitStarted: event({_exitor: indexed(address), _utxoPos: indexed(uint256), _toke
 BlockSubmitted: event({_root: bytes32, _timestamp: timestamp})
 TokenAdded: event({_token: address})
 
-childChain: {
-    root: bytes32,
-    blockTimestamp: timestamp
-}[uint256]
+childChain: map(uint256, ChildChainBlock)
 
-exits: {
-    owner: address,
-    token: address,
-    amount: uint256
-}[uint256]
 
-exitsQueues: address[address]
+exits: map(uint256, Exit)
+
+exitsQueues: map(address, address)
 
 operator: address
 currentChildBlock: uint256
@@ -67,14 +70,14 @@ def ecrecoverSig(_txHash: bytes32, _sig: bytes[65]) -> address:
     # {bytes32 r}{bytes32 s}{uint8 v}
     r: uint256 = extract32(_sig, 0, type=uint256)
     s: uint256 = extract32(_sig, 32, type=uint256)
-    v: int128 = convert(slice(_sig, start=64, len=1), "int128")    
+    v: int128 = convert(slice(_sig, start=64, len=1), int128)
     # Version of signature should be 27 or 28, but 0 and 1 are also possible versions.
     # geth uses [0, 1] and some clients have followed. This might change, see:
     # https://github.com/ethereum/go-ethereum/issues/2053
     if v < 27:
         v += 27
     if v in [27, 28]:
-        return ecrecover(_txHash, convert(v, "uint256"), r, s)
+        return ecrecover(_txHash, convert(v, uint256), r, s)
     return ZERO_ADDRESS
 
 
@@ -127,7 +130,7 @@ def checkMembership(_leaf: bytes32, _index: uint256, _rootHash: bytes32, _proof:
 # @return Child chain block at the specified block number.
 @public
 @constant
-def getChildChain(_blockNumber: uint256) -> (bytes32, uint256):
+def getChildChain(_blockNumber: uint256) -> (bytes32, timestamp):
     return self.childChain[_blockNumber].root, self.childChain[_blockNumber].blockTimestamp
 
 # @dev Determines the next deposit block number.
@@ -206,11 +209,11 @@ def addExitToQueue(_utxoPos: uint256, _exitor: address, _token: address, _amount
     assert _amount > 0
     assert self.exits[_utxoPos].amount == 0
     assert PriorityQueue(self.exitsQueues[ZERO_ADDRESS]).insert(priority) # ZERO_ADDRESS means ETH's address
-    self.exits[_utxoPos] = {
+    self.exits[_utxoPos] = Exit({
         owner: _exitor,
         token: _token,
         amount: _amount
-    }
+    })
     log.ExitStarted(_exitor, _utxoPos, _token, _amount)
 
 
@@ -224,10 +227,10 @@ def addExitToQueue(_utxoPos: uint256, _exitor: address, _token: address, _amount
 def submitBlock(_root: bytes32):
     # Only operator can execute.
     assert msg.sender == self.operator
-    self.childChain[self.currentChildBlock] = {
+    self.childChain[self.currentChildBlock] = ChildChainBlock({
         root: _root,
         blockTimestamp: block.timestamp
-    }
+    })
 
     # Update block numbers.
     self.currentChildBlock += 1000 # child block interval
@@ -243,17 +246,17 @@ def deposit():
     
     root: bytes32 = sha3(
                         concat(
-                            convert(msg.sender, "bytes32"),
-                            convert(ZERO_ADDRESS, "bytes32"), # ZERO_ADDRESS means ETH's address
-                            convert(msg.value, "bytes32")
+                            convert(msg.sender, bytes32),
+                            convert(ZERO_ADDRESS, bytes32), # ZERO_ADDRESS means ETH's address
+                            convert(msg.value, bytes32)
                         )
                     )                
     depositBlock: uint256 = self.getDepositBlock()
 
-    self.childChain[depositBlock] = {
+    self.childChain[depositBlock] = ChildChainBlock({
         root: root,
         blockTimestamp: block.timestamp
-    }
+    })
     self.currentDepositBlock += 1
 
     log.Deposit(msg.sender, depositBlock, ZERO_ADDRESS, msg.value)
@@ -271,9 +274,9 @@ def startDepositExit(_depositPos: uint256, _token: address, _amount: uint256):
     root: bytes32 = self.childChain[blknum].root
     depositHash: bytes32 = sha3(
                                 concat(
-                                    convert(msg.sender, "bytes32"),
-                                    convert(_token, "bytes32"),
-                                    convert(_amount, "bytes32")
+                                    convert(msg.sender, bytes32),
+                                    convert(_token, bytes32),
+                                    convert(_amount, bytes32)
                                 )
                             )
     # Check that the block root of the UTXO position is same as depositHash.
@@ -360,11 +363,7 @@ def finalizeExits(_token: address):
     exitable_at: uint256
     (utxoPos, exitable_at) = self.getNextExit(_token)
 
-    currentExit: {
-        owner: address,
-        token: address,
-        amount: uint256
-    } = self.exits[utxoPos]
+    currentExit: Exit = self.exits[utxoPos]
     for i in range(1073741824): # 1073741824 is 2^30, max size of priority queue is 2^30 - 1
         if not exitable_at < as_unitless_number(block.timestamp):
             break

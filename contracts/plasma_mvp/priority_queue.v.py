@@ -1,5 +1,5 @@
 owner: address
-heapList: uint256[uint256]
+heapList: map(uint256, uint256)
 currentSize: uint256
 
 # Temporary solution for constructor, 
